@@ -1063,6 +1063,11 @@ tnew(int col, int row)
 	treset();
 }
 
+int tisaltscr(void)
+{
+	return IS_SET(MODE_ALTSCREEN);
+}
+
 void
 tswapscreen(void)
 {
@@ -1295,6 +1300,9 @@ tsetchar(Rune u, Glyph *attr, int x, int y)
 	term.dirty[y] = 1;
 	term.line[y][x] = *attr;
 	term.line[y][x].u = u;
+
+	if (isboxdraw(u))
+		term.line[y][x].mode |= ATTR_BOXDRAW;
 }
 
 void
@@ -1940,12 +1948,23 @@ strhandle(void)
 			}
 			return;
 		case 4: /* color set */
-			if (narg < 3)
+		case 10: /* foreground set */
+		case 11: /* background set */
+		case 12: /* cursor color */
+			if ((par == 4 && narg < 3) || narg < 2)
 				break;
-			p = strescseq.args[2];
+			p = strescseq.args[((par == 4) ? 2 : 1)];
 			/* FALLTHROUGH */
 		case 104: /* color reset, here p = NULL */
-			j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+			if (par == 10)
+				j = defaultfg;
+			else if (par == 11)
+				j = defaultbg;
+			else if (par == 12)
+				j = defaultcs;
+			else
+				j = (narg > 1) ? atoi(strescseq.args[1]) : -1;
+
 			if (xsetcolorname(j, p)) {
 				if (par == 104 && narg <= 1)
 					return; /* color reset without parameter */
@@ -1956,6 +1975,8 @@ strhandle(void)
 				 * TODO if defaultbg color is changed, borders
 				 * are dirty
 				 */
+				if (j == defaultbg)
+					xclearwin();
 				redraw();
 			}
 			return;
@@ -2744,8 +2765,8 @@ draw(void)
 	drawregion(0, 0, term.col, term.row);
 	if (term.scr == 0)
 		xdrawcursor(cx, term.c.y, term.line[term.c.y][cx],
-			term.ocx, term.ocy, term.line[term.ocy][term.ocx],
-			term.line[term.ocy], term.col);
+				term.ocx, term.ocy, term.line[term.ocy][term.ocx],
+				term.line[term.ocy], term.col);
 	term.ocx = cx, term.ocy = term.c.y;
 	xfinishdraw();
 

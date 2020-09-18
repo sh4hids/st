@@ -5,11 +5,8 @@
  *
  * font: see http://freedesktop.org/software/fontconfig/fontconfig-user.html
  */
-static char *font = "FiraCode Nerd Font:pixelsize=28:antialias=true:autohint=true";
-static char *font2[] = {
-  "Noto Sans Bengali:pixelsize=28:antialias=true:autohint=true"
-};
-
+static char *font = "FiraCode Nerd Font Mono:pixelsize=24:antialias=true:autohint=true";
+static char *font2[] = { "JoyPixels:pixelsize=18:antialias=true:autohint=true" };
 static int borderpx = 2;
 
 /*
@@ -45,9 +42,14 @@ static unsigned int tripleclicktimeout = 600;
 /* alt screens */
 int allowaltscreen = 1;
 
-/* frames per second st should at maximum draw to the screen */
-static unsigned int xfps = 120;
-static unsigned int actionfps = 30;
+/*
+ * draw latency range in ms - from new content/keypress/etc until drawing.
+ * within this range, st draws when content stops arriving (idle). mostly it's
+ * near minlatency, but it waits longer for slow updates to avoid partial draw.
+ * low minlatency will tear/flicker more, as it can "detect" idle too early.
+ */
+static double minlatency = 8;
+static double maxlatency = 33;
 
 /*
  * blinking timeout (set to 0 to disable blinking) for the terminal blinking
@@ -66,6 +68,18 @@ int ximspot_update_interval = 1000;
  * thickness of underline and bar cursors
  */
 static unsigned int cursorthickness = 2;
+
+/*
+ * 1: render most of the lines/blocks characters without using the font for
+ *    perfect alignment between cells (U2500 - U259F except dashes/diagonals).
+ *    Bold affects lines thickness if boxdraw_bold is not 0. Italic is ignored.
+ * 0: disable (render all U25XX glyphs normally from the font).
+ */
+const int boxdraw = 1;
+const int boxdraw_bold = 1;
+
+/* braille (U28XX):  1: render as adjacent "pixels",  0: use font */
+const int boxdraw_braille = 1;
 
 /*
  * bell volume. It must be a value between -100 and 100. Use 0 for disabling
@@ -91,29 +105,13 @@ char *termname = "st-256color";
  *
  *	stty tabs
  */
-unsigned int tabspaces = 4;
+unsigned int tabspaces = 8;
 
 /* bg opacity */
-float alpha = 0.95;
+float alpha = 0.9;
 
 /* Terminal colors (16 first used in escape sequence) */
 static const char *colorname[] = {
-	/* "#282828", /1* hard contrast: #1d2021 / soft contrast: #32302f *1/ */
-	/* "#cc241d", */
-	/* "#98971a", */
-	/* "#d79921", */
-	/* "#458588", */
-	/* "#b16286", */
-	/* "#689d6a", */
-	/* "#a89984", */
-	/* "#928374", */
-	/* "#fb4934", */
-	/* "#b8bb26", */
-	/* "#fabd2f", */
-	/* "#83a598", */
-	/* "#d3869b", */
-	/* "#8ec07c", */
-	/* "#ebdbb2", */
   "#292d3e", /* black */
   "#f07178", /* red */
   "#c3e88d", /* green */
@@ -131,14 +129,13 @@ static const char *colorname[] = {
   "#c792ea", /* magenta */
   "#89ddff", /* cyan */
   "#ffffff", /* white */
-	[255] = 0,
-	/* more colors can be added after 255 to use with DefaultXX */
-	"#959dcb", /* 256 -> cursor */
-	"#292d3e", /* 257 -> rev cursor*/
-	/* "#282828", /1* 258 -> bg *1/ */
-	/* "#ebdbb2", /1* 259 -> fg *1/ */
+  
+  [255] = 0,
+
+  "#959dcb", /* 256 -> cursor */
+  "#292d3e", /* 257 -> rev cursor*/
   "#292d3e", /* background */
-	"#959dcb", /* foreground */
+  "#959dcb", /* foreground */
 };
 
 
@@ -148,8 +145,8 @@ static const char *colorname[] = {
  */
 unsigned int defaultfg = 259;
 unsigned int defaultbg = 258;
-static unsigned int defaultcs = 256;
-static unsigned int defaultrcs = 257;
+unsigned int defaultcs = 256;
+unsigned int defaultrcs = 257;
 
 /*
  * Default shape of cursor
@@ -178,7 +175,7 @@ static unsigned int mousebg = 0;
  * Color used to display font attributes when fontconfig selected a font which
  * doesn't match the ones requested.
  */
-static unsigned int defaultattr = 18;
+static unsigned int defaultattr = 11;
 
 /*
  * Xresources preferences to load at startup
@@ -207,8 +204,6 @@ ResourcePref resources[] = {
 		{ "cursorColor",  STRING,  &colorname[256] },
 		{ "termname",     STRING,  &termname },
 		{ "shell",        STRING,  &shell },
-		{ "xfps",         INTEGER, &xfps },
-		{ "actionfps",    INTEGER, &actionfps },
 		{ "blinktimeout", INTEGER, &blinktimeout },
 		{ "bellvolume",   INTEGER, &bellvolume },
 		{ "tabspaces",    INTEGER, &tabspaces },
@@ -231,14 +226,12 @@ static MouseShortcut mshortcuts[] = {
 
 /* Internal keyboard shortcuts. */
 #define MODKEY Mod1Mask
-#define TERMMOD (ControlMask|ShiftMask)
+#define TERMMOD (Mod1Mask|ShiftMask)
 
 MouseKey mkeys[] = {
 	/* button               mask            function        argument */
-	{ Button4,              ShiftMask,      kscrollup,      {.i =  1} },
-	{ Button5,              ShiftMask,      kscrolldown,    {.i =  1} },
-	{ Button4,              MODKEY,         kscrollup,      {.i =  1} },
-	{ Button5,              MODKEY,         kscrolldown,    {.i =  1} },
+	{ Button4,              XK_NO_MOD,      kscrollup,      {.i =  1} },
+	{ Button5,              XK_NO_MOD,      kscrolldown,    {.i =  1} },
 	{ Button4,              TERMMOD,        zoom,           {.f =  +1} },
 	{ Button5,              TERMMOD,        zoom,           {.f =  -1} },
 };
@@ -260,10 +253,10 @@ static Shortcut shortcuts[] = {
 	{ TERMMOD,              XK_Prior,       zoom,           {.f = +1} },
 	{ TERMMOD,              XK_Next,        zoom,           {.f = -1} },
 	{ MODKEY,               XK_Home,        zoomreset,      {.f =  0} },
-	{ TERMMOD,              XK_C,           clipcopy,       {.i =  0} },
+	{ MODKEY,               XK_c,           clipcopy,       {.i =  0} },
 	{ ShiftMask,            XK_Insert,      clippaste,      {.i =  0} },
-	{ TERMMOD,              XK_V,           clippaste,      {.i =  0} },
-	{ XK_ANY_MOD,		    Button2,	    selpaste,	    {.i =  0} },
+	{ MODKEY,               XK_v,           clippaste,      {.i =  0} },
+	{ XK_ANY_MOD,		Button2,	selpaste,	{.i =  0} },
 	{ MODKEY,               XK_Num_Lock,    numlock,        {.i =  0} },
 	{ MODKEY,               XK_Control_L,   iso14755,       {.i =  0} },
 	{ ShiftMask,            XK_Page_Up,     kscrollup,      {.i = -1} },
@@ -276,6 +269,8 @@ static Shortcut shortcuts[] = {
 	{ MODKEY,               XK_Down,        kscrolldown,    {.i =  1} },
 	{ MODKEY,               XK_u,           kscrollup,      {.i = -1} },
 	{ MODKEY,               XK_d,           kscrolldown,    {.i = -1} },
+	{ MODKEY,		XK_s,		changealpha,	{.f = -0.05} },
+	{ MODKEY,		XK_a,		changealpha,	{.f = +0.05} },
 	{ TERMMOD,              XK_Up,          zoom,           {.f = +1} },
 	{ TERMMOD,              XK_Down,        zoom,           {.f = -1} },
 	{ TERMMOD,              XK_K,           zoom,           {.f = +1} },
